@@ -1,6 +1,6 @@
-# Topic 1 — Scalability
+# Topic 1 — Scalability: Scale from Zero to Millions of Users
 
-> **Phase:** Foundations | **Depth:** Deep | **Azure Practical:** Yes
+> **Phase:** Foundations | **Source:** Alex Xu Vol 1 Ch.1 + Ch.2 | **Azure Practical:** Yes
 
 ---
 
@@ -8,13 +8,24 @@
 
 1. [What is Scalability?](#1-what-is-scalability)
 2. [Scalability vs Performance vs Availability](#2-scalability-vs-performance-vs-availability)
-3. [Vertical Scaling (Scale Up)](#3-vertical-scaling-scale-up)
-4. [Horizontal Scaling (Scale Out)](#4-horizontal-scaling-scale-out)
+3. [The Evolution: Single Server to Millions of Users](#3-the-evolution-single-server-to-millions-of-users)
+   - [Stage 1: Single Server](#stage-1-single-server)
+   - [Stage 2: Separate Database](#stage-2-separate-database)
+   - [Stage 3: Load Balancer](#stage-3-load-balancer)
+   - [Stage 4: Database Replication](#stage-4-database-replication)
+   - [Stage 5: Cache Layer](#stage-5-cache-layer)
+   - [Stage 6: CDN](#stage-6-cdn)
+   - [Stage 7: Stateless Web Tier](#stage-7-stateless-web-tier)
+   - [Stage 8: Multiple Data Centers](#stage-8-multiple-data-centers)
+   - [Stage 9: Message Queue](#stage-9-message-queue)
+   - [Stage 10: Logging, Metrics, Automation](#stage-10-logging-metrics-automation)
+   - [Stage 11: Database Sharding](#stage-11-database-sharding)
+4. [Vertical vs Horizontal Scaling — Deep Dive](#4-vertical-vs-horizontal-scaling--deep-dive)
 5. [Stateless vs Stateful — The Core Problem](#5-stateless-vs-stateful--the-core-problem)
 6. [Auto-Scaling](#6-auto-scaling)
-7. [Database Scalability](#7-database-scalability)
+7. [Back-of-the-Envelope Estimation](#7-back-of-the-envelope-estimation)
 8. [Identifying Bottlenecks](#8-identifying-bottlenecks)
-9. [Real-World Architecture Evolution](#9-real-world-architecture-evolution)
+9. [Key Principles — Alex Xu Summary](#9-key-principles--alex-xu-summary)
 10. [Azure Practical](#10-azure-practical)
 11. [Interview Questions](#11-interview-questions)
 
@@ -24,406 +35,714 @@
 
 Scalability is the **ability of a system to handle a growing amount of work by adding resources**.
 
-A system is said to be scalable if:
+A system is scalable if:
 - Adding more resources results in **proportional performance improvement**
-- The system continues to work correctly under increased load
-- The cost of scaling stays predictable
+- The system continues to work **correctly** under increased load
+- The cost of scaling remains **predictable**
 
 ### The Mental Model
 
 Think of a restaurant:
 - 10 customers → 1 chef handles it fine
-- 100 customers → do you buy a faster chef (vertical) or hire 9 more chefs (horizontal)?
+- 100 customers → buy a faster chef (vertical) or hire 9 more chefs (horizontal)?
 
-Both approaches work, but they have very different trade-offs, costs, and failure modes.
-
-### Why Does Scalability Matter?
-
-- User traffic is unpredictable — a viral moment can 100x your load overnight
-- Without scalability, you either over-provision (waste money) or under-provision (system crashes)
-- Modern businesses are built on the assumption that systems can grow with demand
+Both work, but with very different trade-offs, costs, and failure modes.
 
 ### What Scalability is NOT
 
 | Misconception | Reality |
 |---------------|---------|
-| "Scalable = fast" | A slow system can scale. Scalability is about growth capacity, not speed. |
-| "Just throw hardware at it" | Without architectural decisions (stateless, partitioning), more hardware does nothing |
-| "Scalability = availability" | They overlap but are different. A system can be highly available but not scalable. |
+| "Scalable = fast" | A slow system can scale. Scalability is about growth capacity, not speed |
+| "Just throw hardware at it" | Without statelessness and partitioning, more hardware does nothing |
+| "Scalability = availability" | They overlap but are different. A system can be highly available but not scalable |
 
 ---
 
 ## 2. Scalability vs Performance vs Availability
 
-These three are often confused in interviews. Know the distinction cold.
-
 ### Performance
 - How fast a **single request** is processed
-- Measured in **latency** (ms per request) and **throughput** (requests per second)
-- Optimization: caching, faster code, better algorithms, indexes
+- Measured in **latency** (ms per request) and **throughput** (requests/second)
 
 ### Scalability
 - How the system behaves as **load increases**
-- A perfectly performant system at 100 users might collapse at 10,000
-- Optimization: horizontal scaling, partitioning, load balancing
+- A perfectly performant system at 100 users may collapse at 10,000
 
 ### Availability
 - What percentage of time the system is **operational and accessible**
-- Measured as uptime: 99.9% = 8.7 hours downtime/year, 99.99% = 52 minutes/year
-- Optimization: redundancy, failover, health checks
+- Measured in "nines" — from Alex Xu Ch.2:
 
-### The relationship
+| Availability | Downtime per year | Downtime per month | Downtime per day |
+|-------------|-------------------|--------------------|------------------|
+| 99%         | 3.65 days         | 7.2 hours          | 14.4 minutes     |
+| 99.9%       | 8.77 hours        | 43.8 minutes       | 1.44 minutes     |
+| 99.99%      | 52.60 minutes     | 4.38 minutes       | 8.66 seconds     |
+| 99.999%     | 5.26 minutes      | 26.28 seconds      | 0.87 seconds     |
 
-```
-High Performance + No Scalability  →  Fast but breaks under load
-High Scalability + Low Performance →  Handles load but every request is slow
-High Availability + No Scalability →  Always up but degrades under load
-```
+> Azure, AWS, and Google Cloud all set their SLAs at **99.9% or above** for compute.
 
-The goal is **all three**. In practice, trade-offs exist and you design for your specific requirements.
+A Service Level Agreement (SLA) is a formal contract between the provider and customer defining the uptime guarantee. The more nines, the more expensive and complex to achieve.
 
 ---
 
-## 3. Vertical Scaling (Scale Up)
+## 3. The Evolution: Single Server to Millions of Users
 
-### What It Is
+Alex Xu's approach: build incrementally. Start simple, identify the bottleneck at each stage, solve it, and repeat.
 
-Upgrading the **existing machine** with more powerful hardware:
-- More CPU cores
-- More RAM
-- Faster SSD
-- Better network card
+---
+
+### Stage 1: Single Server
+
+Everything runs on one machine — web app, database, cache.
 
 ```
-Before:  [Server: 4 CPU, 16GB RAM]
-After:   [Server: 32 CPU, 128GB RAM]
+[User] ──DNS lookup──> [DNS Server] ──returns IP──> [User]
+[User] ──HTTP request──> [Single Server: App + DB + Cache]
 ```
 
-### How It Works Internally
+**Request flow:**
+1. User accesses `api.mysite.com` → DNS resolves to server IP
+2. Browser sends HTTP request to that IP
+3. Server returns HTML or JSON
 
-When you vertically scale:
-1. The OS can now schedule work across more CPU cores
-2. More data fits in RAM → fewer disk reads → lower latency
-3. More parallel threads can run → higher throughput
-4. The application code changes **nothing** — the OS handles it
+**Traffic sources:**
+- **Web app:** Server-side languages (Java, Python) handle business logic; HTML/JS for frontend
+- **Mobile app:** Communicates via HTTP; JSON is the standard API response format (`GET /users/12`)
 
-This is why vertical scaling is the **first instinct** for engineers — no code changes, instant results.
+**When it breaks:** Even small traffic spikes cause slowness or downtime. Everything shares the same CPU/RAM/Disk.
 
-### Advantages
+---
 
-| Advantage | Explanation |
-|-----------|-------------|
-| **Zero code changes** | Your monolith works immediately on bigger hardware |
-| **No distributed complexity** | No network calls between servers, no consistency issues |
-| **Lower latency** | No inter-server communication overhead |
-| **Simpler operations** | One server to monitor, patch, and maintain |
-| **Strong consistency** | Single database or app = no sync issues |
+### Stage 2: Separate Database
 
-### Disadvantages
+Split the single server into two: one for the web/app tier, one for the database. This allows them to **scale independently**.
 
-| Disadvantage | Explanation |
-|--------------|-------------|
-| **Hard ceiling** | The largest available machine on Azure today is ~416 vCPU, 11.4 TB RAM. You will hit the limit. |
-| **Single point of failure** | One server goes down = entire system down |
-| **Downtime to scale** | Resizing a VM usually requires a restart |
-| **Diminishing returns** | Going from 4→8 CPUs doubles capacity. 256→512 CPUs may give 10% gain because of memory bandwidth and lock contention. |
-| **Cost explosion** | Enterprise hardware (1TB RAM) costs 10x more than commodity hardware, but does not give 10x throughput |
+```
+[Users] → [Web Server] → [Database Server]
+```
 
-### The Amdahl's Law Problem
+**Which database to use?**
+
+**Relational databases (SQL):** MySQL, PostgreSQL, Oracle
+- Store data in tables and rows
+- Support JOIN operations across tables
+- 40+ years of production hardening
+- Best default choice for most applications
+
+**Non-relational databases (NoSQL):** CouchDB, Cassandra, HBase, DynamoDB, MongoDB
+- Grouped into: key-value stores, graph stores, column stores, document stores
+- JOIN operations generally not supported
+
+**Choose NoSQL when:**
+- You need super-low latency
+- Data is unstructured or has no relational shape
+- You need to serialize/deserialize data (JSON, XML, YAML)
+- You need to store a **massive** amount of data
+- You need horizontal partitioning from day one
+
+---
+
+### Stage 3: Load Balancer
+
+A single web server has no failover. A load balancer solves this.
+
+```
+[Users] → [Load Balancer: Public IP]
+                    │
+         ┌──────────┴──────────┐
+         │                     │
+  [Web Server 1]        [Web Server 2]
+  (private IP)          (private IP)
+         │                     │
+         └──────────┬──────────┘
+                    │
+             [Database Server]
+```
+
+**How it works (Alex Xu):**
+- Users connect to the **public IP of the load balancer**, not directly to servers
+- Servers use **private IPs** — unreachable directly from the internet (security benefit)
+- Load balancer communicates with servers over private IPs
+
+**Failover behavior:**
+- If Server 1 goes offline → all traffic routes to Server 2 automatically
+- When traffic grows → add Server 3, load balancer automatically distributes to it
+- No code changes, no user impact
+
+**What this does NOT solve:** The database is still a single point of failure. Database replication is next.
+
+---
+
+### Stage 4: Database Replication
+
+> "Database replication can be used in many database management systems, usually with a master/slave relationship between the original (master) and the copies (slaves)." — Wikipedia [Alex Xu source]
+
+```
+                    ┌──────────────────┐
+                    │  Master Database  │  ← Writes (INSERT, UPDATE, DELETE)
+                    └────────┬─────────┘
+                             │ Replication
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+       [Slave DB 1]   [Slave DB 2]   [Slave DB 3]
+       (Read only)    (Read only)    (Read only)
+```
+
+**Key rules:**
+- Master: handles **all write operations** only
+- Slaves: receive copies from master, serve **read operations** only
+- Most applications have far more reads than writes → more slaves than masters is typical
+
+**Advantages of replication:**
+
+| Advantage | Detail |
+|-----------|--------|
+| **Better performance** | Reads distributed across slaves → more queries processed in parallel |
+| **Reliability** | If a server is destroyed (disaster), data is preserved across other slaves |
+| **High availability** | Website stays up even if one DB goes offline |
+
+**Failover scenarios:**
+
+- **Slave goes offline:** Read operations temporarily route to master. New slave is provisioned and added.
+- **Master goes offline:** A slave is **promoted** to master. All writes redirect to the new master. A new slave replaces the old one for replication. ⚠️ In production, promoted slave may have stale data — data recovery scripts must run to fill gaps.
+
+**Full architecture after this stage:**
+```
+User → DNS → Load Balancer → Web Server 1 or 2
+                                    │               │
+                             [Read: Slave]   [Write: Master]
+```
+
+---
+
+### Stage 5: Cache Layer
+
+> "A cache is a temporary storage area that stores the result of expensive responses or frequently accessed data in memory so that subsequent requests are served more quickly." — Alex Xu
+
+**The problem:** Every page load makes one or more database calls. Repeated DB calls for the same data waste time and resources.
+
+**Cache tier:**
+```
+[Web Server] → check cache first
+                    │
+         Hit ───────┘       Miss ──→ [Database] ──→ store in cache ──→ return
+         │
+      return data
+```
+
+**Read-through cache strategy:**
+1. Web server checks if response is in cache
+2. If yes (hit): return cached data immediately
+3. If no (miss): query database → store result in cache → return to client
+
+**Considerations for using cache (Alex Xu):**
+
+**1. When to use cache:**
+- Use when data is **read frequently but modified infrequently**
+- Cached data is in volatile memory — if cache server restarts, **all data is lost**
+- Therefore: never use cache as the **sole storage** for critical data
+
+**2. Expiration policy:**
+- Set a TTL (Time-To-Live) on every cached item
+- Too short TTL → frequent database reloads
+- Too long TTL → stale data served to users
+- Rule of thumb: TTL should match how frequently the source data changes
+
+**3. Consistency:**
+- Keeping the database and cache in sync is hard
+- Data-modifying operations on DB and cache are **not in a single transaction**
+- When scaling across multiple regions, consistency across the cache layer becomes a major challenge
+- Reference: Facebook's paper "Scaling Memcache at Facebook" (NSDI '13) — the definitive resource
+
+**4. Mitigating failures (SPOF):**
+- A single cache server is a **Single Point of Failure (SPOF)**
+- Recommendation: **multiple cache servers across different data centers**
+- Also: **overprovision memory** by a certain percentage as a buffer for unexpected growth
+
+**5. Eviction policy (what happens when cache is full):**
+
+| Policy | Description | Best For |
+|--------|-------------|----------|
+| **LRU** (Least Recently Used) | Evict the item not accessed for the longest time | Most general use cases |
+| **LFU** (Least Frequently Used) | Evict the item accessed fewest times overall | When access frequency matters |
+| **FIFO** (First In First Out) | Evict the oldest item regardless of access | Simple, predictable use cases |
+
+LRU is the **most popular** and the default for Redis and Memcached.
+
+---
+
+### Stage 6: CDN
+
+> "A CDN is a network of geographically dispersed servers used to deliver static content." — Alex Xu
+
+**What CDN caches:** images, videos, CSS, JavaScript files — static assets.
+
+**How CDN works (step by step):**
+1. User requests `image.png` via a CDN URL (e.g., `https://mysite.cloudfront.net/logo.jpg`)
+2. CDN server nearest to user checks its cache
+3. If **cache miss**: CDN fetches from origin server (or Azure Blob Storage), stores it with TTL
+4. If **cache hit**: returns image directly from CDN edge node
+5. Next user requesting same image gets it from CDN cache — origin server not hit
+
+**Performance impact:** Users in London hitting an Azure CDN edge in Frankfurt get the file in ~5ms. Without CDN, they'd hit your origin server in East US = 80–150ms.
+
+**CDN considerations (Alex Xu):**
+
+**1. Cost:**
+- CDN is run by third-party providers (Azure CDN, Cloudflare, Akamai)
+- Charged for **data transfers out of CDN**
+- Don't cache infrequently used assets — it costs money with no benefit
+- Only cache assets with high access frequency
+
+**2. Cache expiry:**
+- Set appropriate TTL per content type
+- Too long → stale content served (user sees old logo)
+- Too short → frequent origin fetches, CDN provides less value
+- Rule: static assets with versioning (e.g., `logo.v3.jpg`) can have very long TTLs
+
+**3. CDN fallback:**
+- What if the CDN itself goes down?
+- Clients should detect CDN failure and fall back to **origin server**
+- Implement health checks in your frontend to detect CDN errors and switch origin
+
+**4. Invalidating files:**
+Two strategies to force CDN to fetch fresh content before TTL expires:
+- **API-based invalidation:** Call the CDN vendor's API to purge specific objects (Azure CDN supports this)
+- **Object versioning:** Rename the file with a version parameter → `image.png?v=2` or `image.v2.png`. Old URL serves old cached content; new URL forces a fresh fetch.
+
+**Architecture after CDN + Cache:**
+```
+Static assets (JS/CSS/images) → served directly from CDN (not web server)
+Dynamic data → web server → check Redis cache → database if miss
+```
+
+---
+
+### Stage 7: Stateless Web Tier
+
+To scale web servers horizontally, you **must** remove state from the web tier.
+
+**Stateful architecture (problem):**
+```
+User A → must always go to Server 1 (session stored there)
+User B → must always go to Server 2
+User C → must always go to Server 3
+```
+If Server 1 dies → User A is logged out. Load cannot be rebalanced freely.
+
+**Stateless architecture (solution):**
+```
+HTTP requests from users → any web server (doesn't matter which)
+Web servers fetch state from shared data store
+State data is stored externally — NOT inside the web server
+```
+
+```
+[User] → [Load Balancer] → [Web Server 1]  ←→  [Shared State Store]
+                        → [Web Server 2]  ←→  [Redis / NoSQL]
+                        → [Web Server 3]  ←→
+```
+
+**Alex Xu's quote:** _"A stateless system is simpler, more robust, and scalable."_
+
+**What to externalize:**
+
+| State | Where to Store |
+|-------|---------------|
+| User sessions / auth | Redis / Azure Cache for Redis |
+| Shopping cart | Redis or database |
+| File uploads | Azure Blob Storage (direct upload, bypass app server) |
+| Rate limit counters | Redis atomic increment |
+| App feature flags | Azure App Configuration |
+| Distributed locks | Redis Redlock |
+
+**Result:** Once stateless, **auto-scaling works correctly** — add/remove servers freely, users never notice.
+
+---
+
+### Stage 8: Multiple Data Centers
+
+> "To improve availability and provide a better user experience across wider geographical areas, supporting multiple data centers is crucial." — Alex Xu
+
+**Normal operation:**
+- Users are **geoDNS-routed** (geo-routed) to the closest data center
+- Example: 70% US-East, 30% US-West split based on user location
+- **geoDNS:** A DNS service that resolves domain names to IP addresses based on the **user's geographic location**
+
+**Failover:**
+- If Data Center 2 (US-West) goes offline → 100% traffic redirects to Data Center 1 (US-East)
+- DNS TTL determines how fast this switchover propagates
+
+**Technical challenges for multi-data-center setup:**
+
+**1. Traffic redirection:**
+- GeoDNS routes users to nearest data center
+- Azure Front Door handles this automatically with health probes
+
+**2. Data synchronization:**
+- Users in different regions may hit different local databases/caches
+- In failover, traffic goes to a data center where some data may be unavailable
+- Solution: **asynchronous multi-data-center replication** (Netflix's approach)
+- Trade-off: replication lag means data may be slightly stale in secondary region
+
+**3. Test and deployment:**
+- Must test the application from multiple geographic locations
+- Automated deployment tools must keep all data centers consistent
+- Feature flags should roll out regionally, not globally
+
+```
+Region: East US                          Region: West Europe
+[Azure Front Door]                       [Azure Front Door]
+       ↓                                        ↓
+[App Server Fleet]                       [App Server Fleet]
+       ↓                                        ↓
+[Azure SQL Primary] ←── async repl ───→ [Azure SQL Primary]
+[Azure Redis]                            [Azure Redis]
+[Azure Blob CDN]                         [Azure Blob CDN]
+```
+
+---
+
+### Stage 9: Message Queue
+
+> "A message queue is a durable component, stored in memory, that supports asynchronous communication. It serves as a buffer and distributes asynchronous requests." — Alex Xu
+
+**Why it enables scalability:** By decoupling producers and consumers, each can scale independently.
+
+**Basic model:**
+```
+[Producer / Publisher] → [Message Queue] → [Consumer / Subscriber]
+```
+
+**Key property:** The producer can post messages even when the consumer is unavailable. The consumer can read messages even when the producer is down.
+
+**Real example (Alex Xu):**
+Your app supports photo processing (crop, sharpen, blur). These are slow operations.
+
+**Without queue:**
+```
+User uploads photo → App server processes synchronously → User waits 30 seconds
+```
+
+**With queue:**
+```
+User uploads photo → App server publishes job to queue (instant) → Returns "processing..."
+Photo workers → pick jobs from queue → process asynchronously
+User polls or gets notified when done
+```
+
+**Scaling behavior:**
+- Queue grows large → add more workers (scale out consumer independently)
+- Queue is mostly empty → reduce workers (scale in, save cost)
+- Photo upload traffic spikes → producers publish faster, queue absorbs the spike, workers drain at their own pace
+
+**Azure services:** Azure Service Bus (enterprise messaging), Azure Queue Storage (simple FIFO), Azure Event Grid (event-driven), Azure Event Hubs (high-throughput streaming).
+
+---
+
+### Stage 10: Logging, Metrics, Automation
+
+> "When working with a small website that runs on a few servers, logging, metrics, and automation support are good practices but not a necessity. However, now that your site has grown to serve a large business, investing in those tools is essential." — Alex Xu
+
+**Logging:**
+- Monitor error logs to identify errors and problems early
+- Options: per-server logs, or aggregate to centralized service (Azure Log Analytics, Elasticsearch)
+- Centralized logging enables cross-server search and correlation
+
+**Metrics — three categories:**
+
+| Category | Examples |
+|----------|----------|
+| **Host level** | CPU utilization, memory usage, disk I/O, network bandwidth |
+| **Aggregated level** | Database tier performance, cache hit rate, load balancer request distribution |
+| **Key business metrics** | Daily active users (DAU), retention rate, revenue per hour, orders per minute |
+
+**Automation:**
+- **CI/CD:** Every code commit triggers automated tests, build, and deployment
+- Enables early detection of regressions
+- Automate: build, test, deploy, infrastructure provisioning
+- Azure DevOps / GitHub Actions for pipeline automation
+
+**Azure observability stack:**
+- **Azure Monitor:** infrastructure metrics and alerts
+- **Application Insights:** application-level metrics, distributed tracing, dependency tracking
+- **Log Analytics Workspace:** centralized log aggregation with KQL queries
+- **Azure Dashboards / Grafana:** visualization
+
+---
+
+### Stage 11: Database Sharding
+
+When the database itself becomes the bottleneck, sharding is the answer.
+
+**What is sharding:**
+> "Sharding separates large databases into smaller, more easily managed parts called shards. Each shard shares the same schema, though the actual data on each shard is unique to the shard." — Alex Xu
+
+```
+[App] → [Sharding Logic: user_id % 4]
+              │
+    ┌─────────┼────────────┐
+    │         │            │
+[Shard 0]  [Shard 1]  [Shard 2]  [Shard 3]
+user_id%4=0 user_id%4=1 user_id%4=2 user_id%4=3
+```
+
+**Sharding key (partition key):**
+- One or more columns that determine which shard a row goes to
+- Most important criteria: **choose a key that distributes data evenly**
+- Common choices: `user_id`, `tenant_id`, geographic region
+
+**Sharding challenges (Alex Xu — all four):**
+
+**1. Resharding data:**
+Required when:
+- A shard can no longer hold more data due to rapid growth
+- Uneven distribution causes some shards to fill up ("shard exhaustion") faster than others
+- Solution: **Consistent hashing** (Chapter 5) minimizes data movement when resharding
+
+**2. Celebrity problem (hotspot key problem):**
+- Excessive access to a specific shard causes server overload
+- Example: Justin Bieber, Katy Perry, and Lady Gaga all land on Shard 2 in a social app
+- Shard 2 gets overwhelmed with millions of read requests
+- Solution: Allocate a **dedicated shard per celebrity**. That shard might need further partitioning.
+
+**3. Join and de-normalization:**
+- Cross-shard SQL JOIN operations are **extremely expensive or impossible**
+- Solution: **De-normalize** the database — store redundant data so queries can be answered from a single table/shard
+
+**4. Operational complexity:**
+- Schema changes must be applied to all shards
+- Cross-shard transactions require distributed coordination
+- Debugging becomes harder (which shard has the data?)
+
+**Real-world example (Alex Xu):**
+- StackOverflow in 2013: **10 million+ monthly unique visitors** with only **1 master database** — vertical scaling worked long enough. Sharding was deferred until truly necessary.
+
+---
+
+## 4. Vertical vs Horizontal Scaling — Deep Dive
+
+### Vertical Scaling (Scale Up)
+
+Upgrade the **existing machine** with more powerful hardware.
+
+```
+Before:  [Server: 4 vCPU, 16GB RAM]
+After:   [Server: 32 vCPU, 128GB RAM]
+```
+
+**The Amdahl's Law Problem:**
 
 Amdahl's Law explains why vertical scaling has diminishing returns:
 
 ```
-Speedup = 1 / (S + (1-S)/N)
+Max Speedup = 1 / (S + (1-S)/N)
 
 Where:
-  S = fraction of work that is sequential (cannot be parallelized)
+  S = fraction of code that is sequential (cannot be parallelized)
   N = number of processors
 ```
 
-Example: If 30% of your code is sequential (locks, single-threaded parts):
+If 25% of your code is sequential (DB locks, global mutexes, single-threaded parts):
 - 2 CPUs → 1.6x speedup
 - 4 CPUs → 2.1x speedup
 - 8 CPUs → 2.9x speedup (not 8x!)
-- ∞ CPUs → max 3.3x speedup (law of diminishing returns)
+- ∞ CPUs → **max 4x speedup** — wall hit!
 
-**Conclusion:** There is always a bottleneck in sequential code that limits how much vertical scaling helps.
+**Hard limits (from Alex Xu):**
+- AWS high-memory instances go up to 24 TB RAM on RDS
+- Azure largest VMs go to ~416 vCPU, 11.4 TB RAM
+- These are the absolute ceilings — once hit, only horizontal scaling remains
 
-### When to Choose Vertical Scaling
+### Horizontal Scaling (Scale Out)
 
-- Early-stage product with small, predictable load
-- Stateful systems that are hard to distribute (some legacy databases)
-- When you need a quick fix and have budget headroom
-- When the traffic pattern is steady and max load is known
+Add more machines. Each machine handles a fraction of the load.
 
----
-
-## 4. Horizontal Scaling (Scale Out)
-
-### What It Is
-
-Adding **more machines** that share the load:
-
+**Shared-nothing architecture (the gold standard):**
 ```
-Before:  [Server A: 4 CPU]
-
-After:   [Server A: 4 CPU]
-         [Server B: 4 CPU]
-         [Server C: 4 CPU]
-         [Load Balancer] → distributes traffic across A, B, C
+Each server:
+  ✓ Own CPU/RAM — no shared memory between servers
+  ✓ No direct connection to other app servers
+  ✓ Reads/writes go to a shared EXTERNAL store (DB, cache, queue)
 ```
 
-### How It Works
+If Server A dies → Server B has everything it needs in the external store to continue.
 
-1. A **load balancer** sits in front of all servers
-2. Each incoming request is routed to one of the servers
-3. Each server independently processes its request
-4. Responses go back through the load balancer (or directly to client)
-
-This works perfectly **only if servers are stateless** (covered in section 5).
-
-### Advantages
-
-| Advantage | Explanation |
-|-----------|-------------|
-| **Theoretically unlimited scale** | Add as many servers as you need |
-| **No single point of failure** | If one server dies, others handle the load |
-| **Linear cost scaling** | 10x more servers ≈ 10x more cost (commodity hardware) |
-| **Scale on demand** | Add/remove servers based on real-time traffic (auto-scaling) |
-| **Zero downtime scaling** | Add a server → it joins the pool, no restart needed |
-| **Geographic distribution** | Put servers in multiple regions for lower global latency |
-
-### Disadvantages
-
-| Disadvantage | Explanation |
-|--------------|-------------|
-| **Complexity** | Need load balancer, health checks, service discovery |
-| **Statelessness requirement** | Sessions, caches, file uploads must be externalized |
-| **Network latency** | Servers communicate over the network, not shared memory |
-| **Data consistency** | Multiple servers writing to databases causes race conditions |
-| **Harder debugging** | A request may be processed by any server — logs are distributed |
-| **More failure modes** | Network partitions, split-brain, partial failures |
-
-### Shared-Nothing Architecture
-
-The gold standard for horizontal scaling is **shared-nothing architecture**:
+**Linear vs Sub-linear Scaling:**
 
 ```
-Each server has:
-  - Its own CPU/RAM (no shared memory)
-  - No direct connection to other app servers
-  - Reads/writes go to a shared external store (DB, cache, queue)
+Ideal (linear):    2 servers = 2.0x throughput
+Good:              2 servers = 1.8x throughput (some coordination overhead)
+Bad:               2 servers = 1.2x throughput (DB contention, too much locking)
 ```
 
-This means: if server A fails, server B has everything it needs in the external store to continue.
+### Decision Framework
 
-### Linear vs Sub-linear Scaling
-
-Perfect horizontal scaling is linear — double the servers = double the capacity. In practice:
-
-```
-Ideal (linear):        2 servers = 2x throughput
-Good (sub-linear):     2 servers = 1.8x throughput (some coordination overhead)
-Bad (super-linear):    2 servers = 1.2x throughput (too much coordination, DB contention)
-```
-
-The gap from ideal is caused by: shared database contention, lock overhead, cache miss rates, network serialization.
+| Factor | Vertical | Horizontal |
+|--------|----------|------------|
+| Traffic predictable, bounded | ✓ | |
+| Need HA / no SPOF | | ✓ |
+| Stateful legacy system, hard to distribute | ✓ | |
+| Traffic unpredictable, needs auto-scale | | ✓ |
+| Early-stage product | ✓ | |
+| Large scale, cost efficiency | | ✓ |
+| Downtime acceptable for upgrades | ✓ | |
 
 ---
 
 ## 5. Stateless vs Stateful — The Core Problem
 
-This is the **most important concept** for horizontal scaling. If you don't understand this, you cannot scale horizontally.
-
 ### What is State?
+Any data that must persist between requests for a user session:
+- User login session
+- Shopping cart contents
+- Upload progress
+- Rate limit counter
 
-State is **any data that must persist between requests for a user session**.
-
-Examples:
-- User is logged in → session token
-- Items in a shopping cart
-- Upload progress of a file
-- Rate limit counter for a user
-
-### The Problem with Stateful Servers
-
+### Stateful Server (Problem)
 ```
-Request 1: User logs in → Server A stores session in memory
-Request 2: Load balancer routes to Server B → Server B has no session → User is logged out!
+User A → Request 1 → Server 1 stores session in memory
+User A → Request 2 → Load balancer sends to Server 2 → Server 2: "Who is this?" → Error
 ```
-
-If state is stored **inside** a server's memory, the user must always return to the same server. This is called **sticky sessions** (or session affinity).
+User must always return to Server 1. This is **sticky sessions**.
 
 ### Sticky Sessions — Why They're Dangerous
+- If Server 1 dies → all its users lose sessions
+- Server 1 may be at 90% load while Server 2 is at 10% — cannot rebalance
+- Auto-scaling adds new servers, but existing users stay pinned to old ones
+- Rolling deployments take down servers → session loss
 
-Sticky sessions pin a user to a specific server:
+### Stateless Server (Solution)
 ```
-User 123 → always goes to Server A
-User 456 → always goes to Server B
+User A → Request 1 → Server 1 → fetches session from Redis
+User A → Request 2 → Server 3 → fetches SAME session from Redis → works!
 ```
-
-Problems:
-- If Server A dies, all its users lose their sessions
-- Server A may get 80% of the load while Server B sits idle (uneven distribution)
-- You cannot freely add/remove servers without disrupting active users
-- Auto-scaling becomes ineffective
-
-### The Solution — Externalizing State
-
-Move state **out of the server** into a shared external store:
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Server A  │     │   Server B  │     │   Server C  │
-│  (no state) │     │  (no state) │     │  (no state) │
-└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
-       │                   │                   │
-       └───────────────────┼───────────────────┘
-                           │
-               ┌───────────┴───────────┐
-               │                       │
-        ┌──────┴──────┐       ┌────────┴────────┐
-        │  Redis Cache │       │    Database      │
-        │  (sessions)  │       │  (user data)     │
-        └─────────────┘       └─────────────────┘
-```
-
-Now any server can handle any request — they all read the same state from Redis.
-
-### What to Externalize
-
-| State Type | Solution |
-|------------|----------|
-| User sessions / auth tokens | Redis / Azure Cache for Redis |
-| Shopping cart | Redis or database |
-| File uploads | Azure Blob Storage (upload directly, not through app server) |
-| Rate limit counters | Redis with atomic increment |
-| Application config | Azure App Configuration |
-| Locks | Redis distributed locks (Redlock) |
+Any server, any request. State lives in Redis, not in server memory.
 
 ### Truly Stateless Server Checklist
-
-A server is truly stateless if:
-- [ ] It holds no user data in memory between requests
-- [ ] It can be killed and restarted without any user noticing
-- [ ] Any instance can handle any request
-- [ ] Two instances give identical responses for identical inputs + shared state
+- [ ] No user data stored in server memory between requests
+- [ ] Server can be killed and restarted without any user noticing
+- [ ] Any instance produces identical responses for identical inputs
+- [ ] Two instances return same session data (because Redis holds it)
 
 ---
 
 ## 6. Auto-Scaling
 
-Auto-scaling is the ability to **automatically add or remove servers based on load**.
+**Three types:**
 
-### Types of Auto-Scaling
+| Type | How | Best For |
+|------|-----|----------|
+| **Reactive** | Scale when metric crosses threshold | General purpose — most common |
+| **Predictive** | ML models predict load from history | Recurring traffic patterns |
+| **Scheduled** | Pre-scale at a specific time | Known events (Black Friday, end-of-month batch) |
 
-#### Reactive Scaling (most common)
-Scale based on **current metrics**:
-- CPU > 70% for 5 minutes → add 2 servers
-- CPU < 30% for 10 minutes → remove 1 server
-
-Lag problem: By the time you detect the spike and a new server boots (2–5 minutes), the damage is done.
-
-#### Predictive Scaling
-Scale based on **historical patterns**:
-- "Every Monday at 9 AM, traffic spikes 300% → pre-scale at 8:45 AM"
-- Azure and AWS both offer ML-based predictive scaling
-
-#### Scheduled Scaling
-Scale based on **known events**:
-- Black Friday → pre-scale to 10x capacity at midnight
-- End of month → scale up for batch jobs
-
-### Scaling Metrics
+**Scaling metrics:**
 
 | Metric | When to Use |
 |--------|-------------|
-| **CPU utilization** | CPU-bound workloads (computation, encryption) |
-| **Memory usage** | Memory-bound workloads (in-memory caches, JVM apps) |
-| **Request queue depth** | Message processing systems |
-| **Requests per second** | HTTP-heavy APIs |
-| **Custom metrics** | Business KPIs (orders/min, active users) |
+| CPU utilization | CPU-bound workloads (computation, encryption) |
+| Memory usage | Memory-bound (in-memory caches, JVM heaps) |
+| Request queue depth | Message processing systems |
+| Requests per second | HTTP-heavy APIs |
+| Custom metrics | Business KPIs (orders/min, active connections) |
 
-### Scale-In vs Scale-Out Asymmetry
+**Asymmetric cooldowns (critical pattern):**
+- Scale out fast: CPU > 70% for **2 minutes** → add servers
+- Scale in slow: CPU < 30% for **15 minutes** → remove servers
 
-Scale out aggressively, scale in conservatively:
-- Scale out: CPU > 60% for **2 minutes** → add servers (fast response to traffic)
-- Scale in: CPU < 30% for **15 minutes** → remove servers (avoid thrashing)
+This prevents **scale thrashing** — constant add/remove cycles that waste money and cause instability.
 
-This asymmetry prevents **scale thrashing** — where you keep adding and removing servers repeatedly.
+**Boot time lag:** New instances take 2–5 minutes to boot, configure, and warm up. During a sudden spike, the system is under-provisioned during this window. Mitigation: pre-warm instances, use predictive scaling, set minimum instance count high before known events.
 
-### Cooldown Period
-
-After a scale event, wait before triggering another. Without cooldown:
-```
-T=0:  CPU spikes → add 3 servers
-T=30s: New servers not ready yet → CPU still high → add 3 more servers (unnecessary)
-T=2m: All 6 new servers come online → massive over-provisioning
-```
-
-With a 3-minute cooldown, the system waits for new servers to absorb load before deciding to add more.
+**Connection draining:** When removing an instance, don't kill it immediately. Give it 30 seconds to finish serving current requests before terminating. Azure VMSS and App Service both support graceful shutdown/drain.
 
 ---
 
-## 7. Database Scalability
+## 7. Back-of-the-Envelope Estimation
 
-The hardest part of scaling is almost always the **database**. App servers are easy to scale horizontally (stateless). Databases are not.
+Every system design interview requires quick capacity estimation. This is Alex Xu's Ch.2 framework.
 
-### Read Replicas (Scale Read Traffic)
+### Latency Numbers Every Programmer Must Know (Dr. Jeff Dean, Google)
 
+| Operation | Latency |
+|-----------|---------|
+| L1 cache reference | 0.5 ns |
+| Branch mispredict | 5 ns |
+| L2 cache reference | 7 ns |
+| Mutex lock/unlock | 25 ns |
+| Main memory reference | 100 ns |
+| Compress 1 KB with Zippy | 10,000 ns = 10 µs |
+| Send 2 KB over 1 Gbps network | 20,000 ns = 20 µs |
+| Read 1 MB sequentially from memory | 250,000 ns = 250 µs |
+| Round trip within same datacenter | 500,000 ns = 500 µs |
+| **Disk seek** | **10,000,000 ns = 10 ms** |
+| Read 1 MB sequentially from disk | 30,000,000 ns = 30 ms |
+| Send packet CA→Netherlands→CA | 150,000,000 ns = 150 ms |
+
+**Key conclusions:**
+- **Memory is fast, disk is slow** (10ms disk seek vs 100ns memory)
+- Avoid disk seeks if possible — keep hot data in memory
+- Simple compression algorithms are fast — compress before sending over the internet
+- Inter-datacenter latency is significant — design for it
+
+### Data Volume Units
+
+| Unit | Value |
+|------|-------|
+| 1 Byte | 8 bits |
+| 1 KB | 1,024 Bytes |
+| 1 MB | 1,024 KB |
+| 1 GB | 1,024 MB |
+| 1 TB | 1,024 GB |
+| 1 PB | 1,024 TB |
+
+### Twitter Estimation Example (Alex Xu)
+
+**Assumptions:**
+- 300 million monthly active users
+- 50% use Twitter daily → **150 million DAU**
+- Users post 2 tweets/day on average
+- 10% of tweets contain media (avg 1 MB)
+- Data stored for 5 years
+
+**QPS estimation:**
 ```
-                    ┌─────────────────┐
-                    │  Primary DB      │  ← All writes go here
-                    │  (Read + Write)  │
-                    └────────┬────────┘
-                             │ Replication (async)
-              ┌──────────────┼──────────────┐
-              │              │              │
-     ┌────────┴────┐ ┌───────┴─────┐ ┌─────┴───────┐
-     │  Replica 1  │ │  Replica 2  │ │  Replica 3  │
-     │  (Read only)│ │  (Read only)│ │  (Read only)│
-     └────────────┘ └─────────────┘ └─────────────┘
+Tweet QPS = 150M users × 2 tweets/day ÷ 86,400 seconds/day
+          = 300M ÷ 86,400
+          ≈ 3,500 tweets/second
+
+Peak QPS = 2 × 3,500 = 7,000 tweets/second
 ```
 
-- Writes go to primary only
-- Reads are distributed across replicas
-- Replication lag: replicas may be 10–500ms behind primary
-- Works well when reads >> writes (typical: 80% reads, 20% writes)
-
-### Connection Pooling
-
-Each DB connection is expensive (memory, thread, file descriptor). A connection pool:
-- Maintains a fixed set of open connections (e.g., 100)
-- App servers borrow a connection, use it, return it
-- Prevents 1000 app servers × 100 connections each = 100,000 connections from crashing the DB
-
-**Azure: Azure SQL has built-in connection pooling. For more control, use PgBouncer or ProxySQL.**
-
-### Sharding (Horizontal DB Partitioning)
-
-Split data across multiple databases by a **shard key**:
-
+**Storage estimation:**
 ```
-Shard Key: user_id
+Tweet size:  tweet_id = 64 bytes
+             text     = 140 bytes
+             media    = 1 MB (for 10% of tweets)
 
-user_id 1–1M    → Database Shard 1
-user_id 1M–2M   → Database Shard 2
-user_id 2M–3M   → Database Shard 3
+Daily media storage = 150M × 2 × 10% × 1 MB
+                    = 30 TB per day
+
+5-year media storage = 30 TB × 365 × 5 = ~55 PB
 ```
 
-Each shard is a fully independent database with its own storage.
-
-**Challenges:**
-- Cross-shard queries (JOIN across shards) are very expensive or impossible
-- Hotspot shards (one user has 10M records, others have 100)
-- Resharding is painful when shards get too large
-- No global transactions across shards
+**Tips for estimations in interviews:**
+1. **Round aggressively** — `99,987 / 9.1` → use `100,000 / 10`
+2. **Write down assumptions** — state them explicitly, interviewers want to see your reasoning
+3. **Label every unit** — write "5 MB" not "5" — ambiguity fails you
+4. **Commonly asked:** QPS, peak QPS, storage requirements, cache memory size, number of servers
 
 ---
 
 ## 8. Identifying Bottlenecks
 
-A system is only as fast as its slowest component. This is the **Theory of Constraints**.
+A system is only as fast as its slowest component — **Theory of Constraints**.
+
+### The USE Method (for each resource)
+- **U**tilization: How busy is it? (CPU: 85% busy)
+- **S**aturation: Is work queuing? (CPU run queue: 50 threads waiting)
+- **E**rrors: Is it failing? (DB connection timeout rate: 0.1%)
 
 ### Common Bottleneck Locations
 
@@ -433,30 +752,21 @@ Browser → DNS → CDN → Load Balancer → App Server → Cache → Database 
 
 Check in this order:
 1. **Network bandwidth** — is the link saturated?
-2. **Load balancer** — single instance? CPU?
+2. **Load balancer** — single instance? CPU maxed?
 3. **App server CPU/Memory** — is it maxed out?
-4. **Cache hit rate** — if it drops, all misses hit the DB
-5. **Database connections** — pool exhausted?
-6. **Database query time** — slow queries, missing indexes
-7. **Disk I/O** — write bottleneck on spinning disks
+4. **Cache hit rate** — if hit rate drops, all misses slam the DB
+5. **Database connections** — connection pool exhausted?
+6. **Database query time** — slow queries, missing indexes?
+7. **Disk I/O** — write bottleneck on spinning disks?
 
-### The USE Method (Utilization, Saturation, Errors)
+### Load Testing Tools
+- **k6** — script-based, outputs P50/P95/P99 latency
+- **Apache JMeter** — UI-based
+- **Locust** — Python-based distributed testing
+- **Azure Load Testing** — managed, integrates with Azure Monitor
 
-For each resource, check:
-- **Utilization:** How busy is it? (CPU: 85% busy)
-- **Saturation:** Is work queuing up? (CPU run queue: 50 threads waiting)
-- **Errors:** Is it failing? (connection timeout rate: 0.1%)
-
-### Load Testing to Find Bottlenecks
-
-Tools:
-- **k6** — scripted load testing, outputs percentile latency
-- **Apache JMeter** — UI-based load testing
-- **Locust** — Python-based distributed load testing
-- **Azure Load Testing** — managed load testing on Azure
-
-A proper load test:
-1. Start at 10 requests/second, ramp up by 10 every 30 seconds
+**Load test protocol:**
+1. Start at 10 req/sec, ramp up by 10 every 30 seconds
 2. Watch CPU, memory, DB connections, response time
 3. Find the point where P99 latency spikes or errors appear
 4. That is your current capacity ceiling
@@ -464,146 +774,106 @@ A proper load test:
 
 ---
 
-## 9. Real-World Architecture Evolution
+## 9. Key Principles — Alex Xu Summary
 
-How a real product scales from 1 user to 10 million:
+Alex Xu's 8 principles to scale to millions of users:
 
-### Stage 1 — Single Server (0–1,000 users)
-```
-[User] → [Single Server: App + DB + Cache]
-```
-- Everything on one box
-- Simple to deploy, no ops overhead
-- This is fine. Don't over-engineer early.
-
-### Stage 2 — Separate DB (1K–10K users)
-```
-[User] → [App Server] → [Separate Database Server]
-```
-- DB on its own machine
-- App server and DB can now scale independently
-- DB gets more RAM for buffer pool (bigger than app server needs)
-
-### Stage 3 — Load Balanced App Tier (10K–100K users)
-```
-[User] → [Load Balancer] → [App Server 1]
-                         → [App Server 2]
-                         → [App Server 3]
-                              ↓
-                         [Database]
-                         [Redis Cache]
-```
-- App servers are now stateless
-- Sessions stored in Redis
-- DB still single primary (bottleneck approaching)
-
-### Stage 4 — Read Replicas (100K–1M users)
-```
-[User] → [Load Balancer] → [App Servers]
-                              ↓         ↓
-                         [Primary DB]  [Redis]
-                              ↓
-                     [Replica 1] [Replica 2]
-```
-- Read-heavy traffic goes to replicas
-- Writes still go to primary
-- CDN added for static assets
-
-### Stage 5 — Global Scale (1M–10M users)
-```
-Region: East US                    Region: West Europe
-[CDN] → [Front Door] ──────────── [Front Door] → [CDN]
-             ↓                          ↓
-     [App Server Fleet]         [App Server Fleet]
-             ↓                          ↓
-     [DB Primary]       ←replication→  [DB Primary]
-     [Redis Cluster]                   [Redis Cluster]
-```
-- Multiple regions (active-active or active-passive)
-- Azure Front Door routes users to nearest region
-- Data replication across regions (with consistency trade-offs)
-- Microservices likely introduced to scale specific components independently
+| # | Principle | Why |
+|---|-----------|-----|
+| 1 | **Keep web tier stateless** | Enables free horizontal scaling and auto-scaling |
+| 2 | **Build redundancy at every tier** | Eliminate single points of failure at web, cache, DB layers |
+| 3 | **Cache data as much as you can** | Reduce DB load; memory is 1,000x faster than disk |
+| 4 | **Support multiple data centers** | Geographic redundancy, lower latency for global users |
+| 5 | **Host static assets in CDN** | Offload web servers; faster delivery to global users |
+| 6 | **Scale your data tier by sharding** | When vertical DB scaling is exhausted |
+| 7 | **Split tiers into individual services** | Each service scales independently based on its own load |
+| 8 | **Monitor your system and use automation** | You cannot fix what you cannot see; automate to move fast |
 
 ---
 
 ## 10. Azure Practical
 
-### Practical 1: Vertical Scaling — Resize an Azure VM
+### Practical 1: Resize an Azure VM (Vertical Scaling)
 
-**Goal:** Experience VM resizing with zero code changes.
-
-**Steps:**
 ```bash
-# Create a VM (B2s = 2 vCPU, 4GB RAM)
+# Create Resource Group
+az group create --name rg-systemdesign --location eastus
+
+# Create a small VM (B2s = 2 vCPU, 4GB RAM)
 az vm create \
   --resource-group rg-systemdesign \
   --name vm-scaletest \
-  --image UbuntuLTS \
+  --image Ubuntu2204 \
   --size Standard_B2s \
   --admin-username azureuser \
   --generate-ssh-keys
 
-# Check current size
+# Check current VM size
 az vm show \
   --resource-group rg-systemdesign \
   --name vm-scaletest \
-  --query hardwareProfile.vmSize
+  --query hardwareProfile.vmSize \
+  --output tsv
 
-# Resize to a larger VM (B4ms = 4 vCPU, 16GB RAM)
-az vm resize \
-  --resource-group rg-systemdesign \
-  --name vm-scaletest \
-  --size Standard_B4ms
-# Note: This restarts the VM — downtime!
-
-# List available VM sizes in your region
+# List available sizes in your region
 az vm list-vm-resize-options \
   --resource-group rg-systemdesign \
   --name vm-scaletest \
   --output table
+
+# Resize to B4ms (4 vCPU, 16GB RAM) — NOTE: causes restart = downtime
+az vm resize \
+  --resource-group rg-systemdesign \
+  --name vm-scaletest \
+  --size Standard_B4ms
 ```
 
 **What to observe:**
-- The VM restarts during resize (downtime = real problem in production)
-- After resize: `nproc` shows more CPUs, `free -h` shows more RAM
-- No code changes needed — OS picks up new resources automatically
+- The VM restarts during resize — real downtime in production
+- After resize: `nproc` shows 4 CPUs; `free -h` shows 16GB
+- No code changes needed
 
 ---
 
-### Practical 2: Horizontal Scaling — Azure VM Scale Sets (VMSS)
+### Practical 2: Azure VM Scale Sets — Horizontal Auto-Scaling
 
-**Goal:** Deploy a stateless web app that auto-scales based on CPU load.
+**Goal:** Stateless web API that auto-scales by CPU, with state in Redis.
 
-**Architecture:**
-```
-[Internet] → [Azure Load Balancer] → [VMSS: 2–10 VMs]
-                                         ↓
-                                    [Azure Redis]
-```
-
-**Step 1: Create a Resource Group**
+**Step 1: Create Azure Cache for Redis (external state)**
 ```bash
-az group create --name rg-systemdesign --location eastus
+az redis create \
+  --resource-group rg-systemdesign \
+  --name redis-scalelab \
+  --location eastus \
+  --sku Basic \
+  --vm-size c0
+
+# Get the connection key
+az redis list-keys \
+  --resource-group rg-systemdesign \
+  --name redis-scalelab \
+  --query primaryKey \
+  --output tsv
 ```
 
-**Step 2: Create the VM Scale Set**
+**Step 2: Create VM Scale Set**
 ```bash
 az vmss create \
   --resource-group rg-systemdesign \
   --name vmss-webapi \
-  --image UbuntuLTS \
+  --image Ubuntu2204 \
   --vm-sku Standard_B2s \
   --instance-count 2 \
   --admin-username azureuser \
   --generate-ssh-keys \
   --upgrade-policy-mode automatic \
-  --load-balancer vmss-webapi-lb \
+  --load-balancer vmss-lb \
   --backend-pool-name vmss-backend
 ```
 
 **Step 3: Configure Auto-Scale Rules**
 ```bash
-# Create autoscale profile
+# Create autoscale profile (min 2, max 10, default 2)
 az monitor autoscale create \
   --resource-group rg-systemdesign \
   --resource vmss-webapi \
@@ -613,7 +883,7 @@ az monitor autoscale create \
   --max-count 10 \
   --count 2
 
-# Scale OUT rule: CPU > 70% for 5 min → add 2 instances
+# Scale OUT: CPU > 70% for 5 min → add 2 instances
 az monitor autoscale rule create \
   --resource-group rg-systemdesign \
   --autoscale-name autoscale-webapi \
@@ -621,7 +891,7 @@ az monitor autoscale rule create \
   --scale out 2 \
   --cooldown 3
 
-# Scale IN rule: CPU < 30% for 10 min → remove 1 instance
+# Scale IN: CPU < 30% for 10 min → remove 1 instance (asymmetric cooldown)
 az monitor autoscale rule create \
   --resource-group rg-systemdesign \
   --autoscale-name autoscale-webapi \
@@ -630,23 +900,20 @@ az monitor autoscale rule create \
   --cooldown 5
 ```
 
-**Step 4: Deploy a Simple Stateless API on Each Instance**
+**Step 4: Stateless API — state in Redis, not in server**
 
-Create a startup script (`startup.sh`):
-```bash
-#!/bin/bash
-apt-get update -y
-apt-get install -y python3 python3-pip
-pip3 install flask redis
-
-cat > /app/app.py << 'PYEOF'
+`app.py`:
+```python
 from flask import Flask, jsonify
-import os
-import socket
-import redis
+import redis, os, socket
 
 app = Flask(__name__)
-r = redis.Redis(host=os.environ.get('REDIS_HOST', 'localhost'), port=6379)
+r = redis.Redis(
+    host=os.environ['REDIS_HOST'],
+    port=6380,
+    password=os.environ['REDIS_KEY'],
+    ssl=True
+)
 
 @app.route('/health')
 def health():
@@ -654,37 +921,31 @@ def health():
 
 @app.route('/counter')
 def counter():
-    # State stored in Redis, not in-server memory
+    # State in Redis — ANY server can serve this correctly
     count = r.incr('global_counter')
     return jsonify({
-        "count": count,
-        "served_by": socket.gethostname()  # Shows different servers handling requests
+        "count": int(count),
+        "served_by": socket.gethostname()  # Watch different servers appear
     })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
-PYEOF
-
-python3 /app/app.py &
 ```
 
-**Step 5: Test Stateless Horizontal Scaling**
+**Step 5: Test horizontal scaling**
 ```bash
-# Hit the /counter endpoint 10 times — watch "served_by" change
-for i in {1..10}; do
-  curl http://<load-balancer-ip>/counter
-done
+# Hit /counter 10 times — counter is consistent, but different servers respond
+for i in {1..10}; do curl http://<lb-ip>/counter; done
 
-# Expected output (different servers, same counter because Redis holds state):
+# Expected: counter increments correctly regardless of which server handles request
 # {"count": 1, "served_by": "vmss-webapi-0001"}
-# {"count": 2, "served_by": "vmss-webapi-0003"}  ← different server!
+# {"count": 2, "served_by": "vmss-webapi-0003"}  ← different server, same counter!
 # {"count": 3, "served_by": "vmss-webapi-0001"}
-# Counter is consistent because state is in Redis, not in-server memory
 ```
 
-**Step 6: Simulate Load and Watch Auto-Scale**
+**Step 6: Trigger auto-scale**
 ```bash
-# Install stress tool on one instance
+# Run CPU stress on one instance
 az vmss run-command invoke \
   --resource-group rg-systemdesign \
   --name vmss-webapi \
@@ -692,35 +953,44 @@ az vmss run-command invoke \
   --instance-id 0 \
   --scripts "apt-get install -y stress && stress --cpu 4 --timeout 300"
 
-# Watch instance count change in portal or CLI
+# Watch instance count grow
 watch -n 10 'az vmss show \
   --resource-group rg-systemdesign \
   --name vmss-webapi \
   --query sku.capacity'
 ```
 
-**What to observe:**
-- Instance count goes from 2 → 4 → 6 as CPU rises
-- Counter endpoint keeps working during scale-out (no downtime)
-- Counter is consistent because Redis holds the state
-
 ---
 
-### Practical 3: Azure Cache for Redis (Externalizing State)
+### Practical 3: Azure CDN for Static Assets
 
 ```bash
-# Create Redis instance
-az redis create \
+# Create storage account for static assets
+az storage account create \
+  --name stscalelab$RANDOM \
   --resource-group rg-systemdesign \
-  --name redis-systemdesign \
   --location eastus \
-  --sku Basic \
-  --vm-size c0
+  --sku Standard_LRS \
+  --kind StorageV2
 
-# Get connection string
-az redis list-keys \
+# Enable static website hosting
+az storage blob service-properties update \
+  --account-name <storage-account-name> \
+  --static-website \
+  --index-document index.html
+
+# Create CDN profile and endpoint
+az cdn profile create \
   --resource-group rg-systemdesign \
-  --name redis-systemdesign
+  --name cdn-scalelab \
+  --sku Standard_Microsoft
+
+az cdn endpoint create \
+  --resource-group rg-systemdesign \
+  --profile-name cdn-scalelab \
+  --name endpoint-scalelab \
+  --origin <storage-account>.z13.web.core.windows.net \
+  --origin-host-header <storage-account>.z13.web.core.windows.net
 ```
 
 ---
@@ -739,22 +1009,27 @@ See [`../interview-questions/01-scalability.md`](../interview-questions/01-scala
 **Questions covered:**
 1. What is the difference between scalability and performance?
 2. When would you choose vertical scaling over horizontal?
-3. Why can't you just make every server stateful and use sticky sessions?
-4. What is Amdahl's Law and why does it matter for system design?
-5. A company's single MySQL server is running at 95% CPU. What are your options?
-6. How does auto-scaling work and what are the risks?
-7. What does "stateless" mean and how do you make a service stateless?
+3. Why are sticky sessions dangerous for horizontal scaling?
+4. What is Amdahl's Law and why does it matter?
+5. A company's MySQL is at 95% CPU. Walk me through your options.
+6. How does auto-scaling work and what are the failure modes?
+7. How do you make a legacy stateful service stateless?
 8. Your e-commerce site gets 10x traffic on Black Friday. Walk me through your scaling plan.
+9. What are the challenges of database sharding?
+10. Estimate: how many servers do you need to handle 1 million requests per day?
 
 ---
 
-## Key Takeaways
+## Key Takeaways (Alex Xu's 8 Principles + Deep Additions)
 
 | Concept | Rule of Thumb |
 |---------|---------------|
-| Vertical vs Horizontal | Start vertical, go horizontal when you hit the ceiling or need HA |
-| Stateless | Any state that lives in server memory is a horizontal scaling blocker |
-| Auto-scale triggers | Scale out on CPU/queue, scale in slowly (cooldown), never scale in below minimum |
-| Database bottleneck | Add read replicas first, shard only when absolutely necessary |
-| Bottleneck hunting | USE method: Utilization → Saturation → Errors, for every resource |
-| Scaling stages | Single server → Separate DB → Load-balanced app → Read replicas → Global |
+| Start simple | Single server is fine early. Don't over-engineer. |
+| Statelessness | Any server-side state is a horizontal scaling blocker. Externalize to Redis/DB. |
+| DB replication | Master for writes, slaves for reads. Slave promotion is non-trivial in production. |
+| Cache | Use LRU eviction, set TTL, avoid SPOF with multiple nodes, never sole storage for critical data |
+| CDN | Version your static assets, set long TTLs on versioned files, always plan for CDN fallback |
+| Sharding | Last resort. Choose shard key for even distribution. Beware: resharding, hotspot, cross-shard joins |
+| Multi-DC | GeoDNS for routing, async replication for data sync, automate deployment across regions |
+| Bottleneck | USE method: Utilization → Saturation → Errors. Load test to find ceiling before scaling. |
+| Estimation | Memorize latency numbers. Memory ~100ns, Disk ~10ms. Practice Twitter-style QPS/storage math. |
