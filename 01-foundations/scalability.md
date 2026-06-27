@@ -661,77 +661,150 @@ This prevents **scale thrashing** — constant add/remove cycles that waste mone
 
 ## 7. Back-of-the-Envelope Estimation
 
-Every system design interview requires quick capacity estimation. This is Alex Xu's Ch.2 framework.
+### What is it?
 
-### Latency Numbers Every Programmer Must Know (Dr. Jeff Dean, Google)
+A **quick rough calculation** done on a whiteboard to decide if a design will work **before you build it**.
 
-| Operation | Latency |
-|-----------|---------|
-| L1 cache reference | 0.5 ns |
-| Branch mispredict | 5 ns |
-| L2 cache reference | 7 ns |
-| Mutex lock/unlock | 25 ns |
-| Main memory reference | 100 ns |
-| Compress 1 KB with Zippy | 10,000 ns = 10 µs |
-| Send 2 KB over 1 Gbps network | 20,000 ns = 20 µs |
-| Read 1 MB sequentially from memory | 250,000 ns = 250 µs |
-| Round trip within same datacenter | 500,000 ns = 500 µs |
-| **Disk seek** | **10,000,000 ns = 10 ms** |
-| Read 1 MB sequentially from disk | 30,000,000 ns = 30 ms |
-| Send packet CA→Netherlands→CA | 150,000,000 ns = 150 ms |
+Like a civil engineer estimating "this bridge needs roughly 500 tonnes of steel" before doing exact math. Not precise — but good enough to make the right architectural decision.
 
-**Key conclusions:**
-- **Memory is fast, disk is slow** (10ms disk seek vs 100ns memory)
-- Avoid disk seeks if possible — keep hot data in memory
-- Simple compression algorithms are fast — compress before sending over the internet
-- Inter-datacenter latency is significant — design for it
+Interviewers use this to check: can you think in numbers? Do you know your system's limits?
 
-### Data Volume Units
+---
 
-| Unit | Value |
-|------|-------|
-| 1 Byte | 8 bits |
-| 1 KB | 1,024 Bytes |
-| 1 MB | 1,024 KB |
-| 1 GB | 1,024 MB |
-| 1 TB | 1,024 GB |
-| 1 PB | 1,024 TB |
+### The 3-Tier Mental Model (Memorize This, Not the Full Table)
 
-### Twitter Estimation Example (Alex Xu)
+Don't try to memorize every row. Just remember these 4 numbers:
 
-**Assumptions:**
+```
+RAM (memory read)       →   0.1 ms    → instant, like thinking of a word
+Same-datacenter network →   0.5 ms    → like saying the word out loud
+Disk seek               →   10 ms     → like walking to another room to check a book
+Cross-continent network →   150 ms    → like calling someone overseas
+```
+
+**One rule to remember everything:**
+> RAM is 100x faster than network. Disk is 100x slower than network.
+
+**Full reference table (Dr. Jeff Dean, Google):**
+
+| Operation | Latency | Human analogy |
+|-----------|---------|---------------|
+| L1 cache reference | 0.5 ns | Reflex |
+| L2 cache reference | 7 ns | Blink |
+| Main memory (RAM) reference | 100 ns | Thinking of a word |
+| Compress 1 KB (Snappy) | 10 µs | Saying the word |
+| Send 2 KB over 1 Gbps network | 20 µs | Texting someone |
+| Read 1 MB from memory | 250 µs | Reading a sentence |
+| Same-datacenter round trip | 0.5 ms | Calling a colleague |
+| Disk seek | **10 ms** | Walking to another room |
+| Read 1 MB from disk | 30 ms | Reading a page |
+| Cross-continent packet (CA→Europe→CA) | **150 ms** | Calling someone overseas |
+
+---
+
+### When Do You Use This? — Real Interview Situations
+
+#### Situation 1: "Should we add a cache?"
+> Interviewer: "Your product page hits the database every time. Is caching worth it?"
+
+```
+Without cache: DB read from disk  → ~10 ms per request
+With cache:    Redis read from RAM → ~0.1 ms per request
+Improvement:   100x faster
+```
+**Decision:** Yes, absolutely cache it. The numbers justify it.
+
+---
+
+#### Situation 2: "How many servers do we need?"
+> Interviewer: "Design Twitter. How many servers for the API tier?"
+
+```
+DAU                    = 150 million users
+Requests per user/day  = 10 (timeline, tweet, like, search...)
+Total requests/day     = 150M × 10 = 1.5 billion
+QPS                    = 1.5B ÷ 86,400 seconds ≈ 17,000 req/sec
+
+1 server handles       ≈ 1,000 req/sec (standard web server)
+Servers needed         = 17,000 ÷ 1,000 = ~17 servers minimum
+```
+**Decision:** You need at least 17 servers + load balancer. Single server is out.
+
+---
+
+#### Situation 3: "How much storage do we need?"
+> Interviewer: "Design YouTube. How much storage for 5 years of videos?"
+
+```
+Upload rate:    500 hours of video per minute (real YouTube number)
+1 min HD video: ~50 MB
+500 hours       = 30,000 minutes
+Storage/minute  = 30,000 × 50 MB = 1.5 TB per minute
+Per day         = 1.5 TB × 60 × 24 ≈ 2 PB per day
+```
+**Decision:** You need object storage (Azure Blob Storage), not a database. A database cannot handle petabytes.
+
+---
+
+#### Situation 4: "Should we do this synchronously or async?"
+> Interviewer: "User uploads a photo. We resize it to 5 sizes. Do it in the API request?"
+
+```
+Resize 1 image = disk read (10ms) + CPU (50ms) + disk write (10ms) = ~70ms
+5 sizes        = 350ms
+```
+**Decision:** 350ms just for resizing = bad UX. Use a **message queue** and do it async.
+
+---
+
+### Twitter QPS + Storage Estimation (Alex Xu Example)
+
+**Step 1 — Write your assumptions first (always do this in interviews):**
 - 300 million monthly active users
-- 50% use Twitter daily → **150 million DAU**
-- Users post 2 tweets/day on average
-- 10% of tweets contain media (avg 1 MB)
-- Data stored for 5 years
+- 50% use it daily → **150 million DAU**
+- Each user posts 2 tweets/day
+- 10% of tweets have media (avg 1 MB per media)
+- Store data for 5 years
 
-**QPS estimation:**
+**Step 2 — QPS:**
 ```
-Tweet QPS = 150M users × 2 tweets/day ÷ 86,400 seconds/day
-          = 300M ÷ 86,400
-          ≈ 3,500 tweets/second
-
-Peak QPS = 2 × 3,500 = 7,000 tweets/second
+Tweet QPS  = 150M × 2 ÷ 86,400  ≈  3,500 tweets/sec
+Peak QPS   = 2 × 3,500           =  7,000 tweets/sec  (assume 2x for spikes)
 ```
 
-**Storage estimation:**
+**Step 3 — Storage:**
 ```
-Tweet size:  tweet_id = 64 bytes
-             text     = 140 bytes
-             media    = 1 MB (for 10% of tweets)
+Per tweet:   tweet_id (64B) + text (140B) + media (1MB for 10%)
 
-Daily media storage = 150M × 2 × 10% × 1 MB
-                    = 30 TB per day
-
-5-year media storage = 30 TB × 365 × 5 = ~55 PB
+Daily media  = 150M users × 2 tweets × 10% × 1MB  =  30 TB/day
+5-year total = 30 TB × 365 × 5                     ≈  55 PB
 ```
+**Decision:** At 55 PB over 5 years, you need distributed object storage + CDN, not a single database.
 
-**Tips for estimations in interviews:**
-1. **Round aggressively** — `99,987 / 9.1` → use `100,000 / 10`
-2. **Write down assumptions** — state them explicitly, interviewers want to see your reasoning
-3. **Label every unit** — write "5 MB" not "5" — ambiguity fails you
-4. **Commonly asked:** QPS, peak QPS, storage requirements, cache memory size, number of servers
+---
+
+### Data Volume Reference
+
+| Unit | Value | Real-world feel |
+|------|-------|-----------------|
+| 1 KB | 1,024 Bytes | A short text message |
+| 1 MB | 1,024 KB | A photo thumbnail |
+| 1 GB | 1,024 MB | A movie (compressed) |
+| 1 TB | 1,024 GB | 1,000 movies |
+| 1 PB | 1,024 TB | 1 million movies |
+
+---
+
+### Interview Tips
+
+| Tip | Example |
+|-----|---------|
+| Round aggressively | `99,987 / 9.1` → use `100,000 / 10` |
+| Always write assumptions | "I'm assuming 300M MAU, 50% DAU..." |
+| Label every unit | Write "30 TB", never just "30" |
+| State what the number means | "At 7,000 QPS, a single server won't cut it" |
+
+The interviewer doesn't want the exact answer. They want to see your **thinking process** — assumptions → math → decision.
 
 ---
 
